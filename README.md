@@ -1,4 +1,7 @@
 # bm_cicd_github_actions
 Propuesta CICD de github actions
 
-prueba commit hacia dev
+prueba de nuevo commit
+prueba de nuevo commit despues de un git reset hard
+
+cambio
