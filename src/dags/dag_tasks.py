@@ -1,5 +1,4 @@
 import configparser
-import json
 import os
 
 from datetime import timedelta
@@ -16,15 +15,6 @@ from snowflake.core.task.dagv1 import DAG, DAGTask, DAGOperation
 from functions import process_data, train_register
 
 my_dir = os.path.dirname(os.path.realpath(__file__))
-# dir = os.path.abspath(os.path.join(my_dir, '..', '..'))
-# connection_parameters = json.load(open(os.path.join(dir, 'creds.json')))
-# print(my_dir)
-# print(dir)
-
-# session = Session.builder.configs(connection_parameters).create()
-# session.sql_simplifier_enabled = True
-# snowflake_environment = session.sql('SELECT current_user(), current_version()').collect()
-# snowpark_version = VERSION
 
 config = configparser.ConfigParser()
 config_path = os.path.expanduser("~/.snowsql/config") 
