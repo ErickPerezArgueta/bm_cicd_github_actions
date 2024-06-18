@@ -2,19 +2,11 @@ from snowflake.snowpark.session import Session
 from snowflake.snowpark import DataFrame
 import snowflake.snowpark.types as T
 import snowflake.snowpark.functions as F
-from snowflake.ml.modeling.xgboost import XGBClassifier
-from snowflake.ml.modeling.metrics import roc_auc_score
-from snowflake.ml.modeling.metrics import roc_curve
-from snowflake.ml.registry import Registry
 from typing import *
-import json
-import pandas as pd
 import warnings
 from typing  import *
-import logging
 warnings.filterwarnings("ignore")
 import configparser
-import sys
 import os
 
 config = configparser.ConfigParser()

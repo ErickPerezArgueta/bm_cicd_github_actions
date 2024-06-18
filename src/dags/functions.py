@@ -1,48 +1,56 @@
+import io
+import re
+import joblib
+import pandas as pd
+
+from typing import *
+
 from snowflake.snowpark.session import Session
-import snowflake.snowpark.types as T
+from snowflake.snowpark import DataFrame
 import snowflake.snowpark.functions as F
+import snowflake.snowpark.types as T
+
 from snowflake.ml.modeling.xgboost import XGBClassifier
 from snowflake.ml.modeling.metrics import roc_auc_score
 from snowflake.ml.modeling.metrics import roc_curve
 from snowflake.ml.registry import Registry
-import io
-import re
 
-from typing import *
-import pandas as pd
-import warnings
-from typing  import *
-warnings.filterwarnings("ignore")
-import configparser
-import os
-import joblib
+## Funciones process ##
+def read_table_sf(session: Session, db_name: str, schema_name: str, table_name: str) -> DataFrame: 
+    df = session.table(f'{db_name}.{schema_name}.{table_name}')
+    return df
 
-config = configparser.ConfigParser()
-config_path = os.path.expanduser("~/.snowsql/config") 
-config.read(config_path)
+def transform_to_numeric_target(df: DataFrame) -> DataFrame:
+    df_proc = df.withColumn(
+        "QUALITY", F.when(df["QUALITY"] == "Good", 1).otherwise(0)
+    )
+    return df_proc
 
-# Access the values using the section and key
-# Assuming the values you want are in the "connections.dev" section
-dict_creds = {}
+def write_df_to_sf(df: DataFrame, db_name: str, schema_name: str, table_name: str) -> None:
+    df.write.mode("overwrite").save_as_table(f'{db_name}.{schema_name}.{table_name}')
 
-#Se comenta esta linea de codigo para usar el json con credenciales dentro del proyecto
-dict_creds['account'] = config['connections.dev']['accountname']
-dict_creds['user'] = config['connections.dev']['username']
-dict_creds['password'] = config['connections.dev']['password']
-dict_creds['role'] = config['connections.dev']['rolename']
-dict_creds['database'] = config['connections.dev']['dbname']
-dict_creds['warehouse'] = config['connections.dev']['warehousename']
-dict_creds['schema'] = config['connections.dev']['schemaname']
-
-session = Session.builder.configs(dict_creds).create()
-session.use_database(dict_creds['database'])
-session.use_schema(dict_creds['schema'])
+def split_proc(session: Session, db_name: str, schema_name: str, table_name: str)-> None:
+    df_proc = read_table_sf(session, db_name, schema_name, table_name)
+    df_train, df_test = df_proc.random_split([0.8, 0.2], seed=99)
+    write_df_to_sf(df_train, db_name, schema_name, "BANANA_TRAIN")
+    write_df_to_sf(df_test, db_name, schema_name, "BANANA_TEST")
 
 
-#Functions
-def train_model(session: Session, db_name: str, schema_name: str, train_table: str) -> XGBClassifier:
-    #session.use_database(db_name)
-    #session.use_schema(schema_name)
+def process_data(session: Session) -> T.Variant:
+    db = session.get_current_database().strip('"')
+    schema = session.get_current_schema().strip('"')
+
+    df_raw = read_table_sf(session, db, schema, "BANANA_QUALITY_RAW")
+   
+    df_proc = transform_to_numeric_target(df_raw)
+    write_df_to_sf(df_proc, db, schema, "BANANA_QUALITY_PROCESSED")
+
+    split_proc(session, db , schema, "BANANA_QUALITY_PROCESSED")
+    
+    return str(f'El procesamiento se realizó de manera exitosa')
+
+## Funciones train-register ##
+def train_model(session: Session, train_table: str) -> XGBClassifier:
     df_train_banana = session.table(train_table)
     feature_cols = df_train_banana.columns
     feature_cols.remove('QUALITY')
@@ -50,15 +58,6 @@ def train_model(session: Session, db_name: str, schema_name: str, train_table: s
     xgbmodel = XGBClassifier(random_state=123, input_cols=feature_cols, label_cols=target_col, output_cols='PREDICTION')
     xgbmodel.fit(df_train_banana)
     return xgbmodel
-
-# if __name__ == "__main__":
-
-#     xgbmodel = train_model(session, "BANANA_QUALITY", "DEV", "BANANA_TRAIN")
-#     xgb_file = xgbmodel.to_xgboost()
-#     MODEL_FILE = 'model.joblib.gz'
-#     joblib.dump(xgb_file, MODEL_FILE)
-#     session.file.put(MODEL_FILE, "@DEV.ML_MODELS", auto_compress=False, overwrite=True)
-
 
 def get_metrics(session: Session, db_name: str, schema_name: str, table_name: str, model: XGBClassifier)-> Dict[str, str]:
     df = session.table(f"{db_name}.{schema_name}.{table_name}")
@@ -76,9 +75,6 @@ def get_metrics(session: Session, db_name: str, schema_name: str, table_name: st
     return metrics
 
 def next_version(model_name: str, df: pd.DataFrame)-> str:
-    # Filtrar el DataFrame por el nombre del modelo
-    #model_df = df[df['name'] == model_name]
-
     model_df = df[df['name'] == model_name]
     versions_str = model_df['versions'].iloc[0]
     version_list_str = re.findall(r'\d+', versions_str)
@@ -132,46 +128,23 @@ def register_model(
         })
     
     return mv
- 
 
-def main(sess: Session) -> T.Variant:
+def train_register(session: Session) -> T.Variant:
+    db = session.get_current_database().strip('"')
+    schema = session.get_current_schema().strip('"')
 
-    xgbmodel = train_model(sess,  dict_creds['database'],  dict_creds['schema'], "BANANA_TRAIN")
+    xgbmodel = train_model(session, "BANANA_TRAIN")
     xgb_file = xgbmodel.to_xgboost()
     MODEL_FILE = 'model.joblib.gz'
-    # joblib.dump(xgb_file, MODEL_FILE)
-    # sess.file.put(MODEL_FILE, "@DEV.ML_MODELS", auto_compress=False, overwrite=True)
     buffer = io.BytesIO()
     joblib.dump(xgb_file, buffer)
     buffer.seek(0)
 
-    sess.file.put_stream(buffer, f"@{dict_creds['schema']}.ML_MODELS/{MODEL_FILE}", auto_compress=False, overwrite=True)
+    session.file.put_stream(buffer, f"@{schema}.ML_MODELS/{MODEL_FILE}", auto_compress=False, overwrite=True)
 
-    metrics_train = get_metrics(sess,dict_creds['database'], dict_creds['schema'], "BANANA_TRAIN", xgbmodel)
-    metrics_test = get_metrics(sess,dict_creds['database'], dict_creds['schema'], "BANANA_TEST", xgbmodel)
+    metrics_train = get_metrics(session, db, schema, "BANANA_TRAIN", xgbmodel)
+    metrics_test = get_metrics(session, db, schema, "BANANA_TEST", xgbmodel)
 
-    mv = register_model(session=sess, db_name=dict_creds['database'], schema_name=dict_creds['schema'],model=xgbmodel, model_name="BANANA_MODEL", metrics_train=metrics_train, metrics_test=metrics_test)
+    mv = register_model(session=session, db_name=db, schema_name=schema, model=xgbmodel, model_name="BANANA_MODEL", metrics_train=metrics_train, metrics_test=metrics_test)
 
     return str(f'El entrenamiento y registro en model registry se realizó de manera exitosa')
-
-
-sproc = session.sproc.register(func=main,
-                                  name='train_step',
-                                  is_permanent=True,
-                                  replace=True,
-                                  stage_location=f"@{dict_creds['database']}.{dict_creds['schema']}.ML_MODELS",
-                                  execute_as='caller',
-                                  packages=['snowflake-ml-python==1.2.3',
-                                            'snowflake-snowpark-python==1.13.0'
-                                           ])
-
-
-    
-
-
- 
- 
-
-    
-
-
