@@ -1,9 +1,6 @@
 # bm_cicd_github_actions
 Propuesta CICD de github actions
 
-prueba de nuevo commit
-prueba de nuevo commit despues de un git reset hard
+actualizado a nueva cuenta de sf
 
-se agrega cambio para detonar actions
-
-actualiza secrets en github rama exp
+hasta este commit, todo funciona bien 8c5f880
